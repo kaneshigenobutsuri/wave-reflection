@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>波の反射シミュレーション（矢印付き）</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; text-align: center; background-color: #f0f4f8; color: #333; margin: 0; padding: 20px; }
+        .container { display: inline-block; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 900px; }
+        canvas { background-color: #ffffff; border: 1px solid #ccc; border-radius: 4px; display: block; margin: 0 auto; }
+        
+        .control-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px; }
+        .wave-group { background: #f8f9fa; padding: 15px; border-radius: 8px; border-top: 4px solid #ccc; }
+        .wave-settings { border-top-color: #007bff; }
+        .reflection-settings { border-top-color: #333; }
+        
+        .slider-group { display: flex; flex-direction: column; align-items: center; margin-bottom: 10px; background: white; padding: 5px; border-radius: 4px; border: 1px solid #eee; }
+        .slider-group label { font-size: 12px; font-weight: bold; margin-bottom: 3px; }
+        input[type=range] { width: 90%; cursor: pointer; }
+
+        .common-controls { grid-column: 1 / -1; background: #eee; padding: 15px; border-radius: 8px; display: flex; flex-direction: column; gap: 12px; }
+        .button-group { display: flex; justify-content: center; gap: 10px; }
+        button { padding: 10px 20px; font-size: 14px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
+        #pauseBtn { background-color: #28a745; color: white; width: 120px; }
+        #resetBtn { background-color: #dc3545; color: white; width: 120px; }
+        
+        .toggle-group { display: flex; justify-content: center; gap: 10px; margin: 10px 0; }
+        .toggle-btn { background: #ddd; color: #333; width: 100px; }
+        .toggle-btn.active { background: #333; color: white; }
+
+        .time-area, .density-area { background: #fff; padding: 10px; border-radius: 6px; border: 1px solid #ddd; }
+        .instruction { font-size: 11px; color: #777; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h3>波の反射シミュレーション</h3>
+    
+    <canvas id="waveCanvas" width="850" height="350"></canvas>
+
+    <div class="control-panel">
+        <div class="wave-group wave-settings">
+            <strong>入射波の設定</strong>
+            <div class="slider-group">
+                <label>振幅 A: <span id="val-amp">40</span></label>
+                <input type="range" id="amp" min="0" max="80" value="40">
+            </div>
+            <div class="slider-group">
+                <label>波長 λ: <span id="val-lambda">4.0</span> [m]</label>
+                <input type="range" id="lambda" min="1" max="10" value="4" step="0.1">
+            </div>
+            <div class="slider-group">
+                <label>速さ v: <span id="val-speed">3.5</span> [m/s]</label>
+                <input type="range" id="speed" min="0.1" max="5" value="3.5" step="0.1">
+            </div>
+        </div>
+
+        <div class="wave-group reflection-settings">
+            <strong>反射の条件</strong>
+            <div class="toggle-group">
+                <button id="freeEndBtn" class="toggle-btn active">自由端</button>
+                <button id="fixedEndBtn" class="toggle-btn">固定端</button>
+            </div>
+            <p style="font-size: 12px; color: #666; text-align: left; padding: 0 10px;">
+                青：入射波（透過波は薄く表示）<br>
+                緑：反射波<br>
+                赤：合成波（実際に観測される波）
+            </p>
+        </div>
+
+        <div class="common-controls">
+            <div class="button-group">
+                <button id="pauseBtn">▶ 再生</button>
+                <button id="resetBtn">リセット</button>
+            </div>
+            <div class="instruction">※スペースキーでも再生/停止を切り替えられます</div>
+            
+            <div class="slider-group time-area">
+                <label>時間 t: <span id="val-time">0.00</span> [s]</label>
+                <input type="range" id="timeSlider" min="0" max="10" value="0" step="0.01">
+            </div>
+
+            <div class="slider-group density-area">
+                <label>媒質の間隔: <span id="val-density">0.5</span> [m]</label>
+                <input type="range" id="density" min="0.1" max="2.0" value="0.5" step="0.1">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('waveCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const elements = {
+        amp: document.getElementById('amp'),
+        lambda: document.getElementById('lambda'),
+        speed: document.getElementById('speed'),
+        density: document.getElementById('density'),
+        timeSlider: document.getElementById('timeSlider'),
+        pauseBtn: document.getElementById('pauseBtn'),
+        resetBtn: document.getElementById('resetBtn'),
+        freeEndBtn: document.getElementById('freeEndBtn'),
+        fixedEndBtn: document.getElementById('fixedEndBtn')
+    };
+
+    const PX_M = 50; 
+    const CENTER_Y = canvas.height / 2;
+    const WALL_X_M = 14; // 壁の位置
+    
+    let isPaused = true;
+    let t = 0;
+    let reflectionMode = 'free';
+
+    const defaults = { amp: 40, lambda: 4.0, speed: 3.5, density: 0.5, time: 0 };
+
+    function togglePlayPause() {
+        isPaused = !isPaused;
+        updatePauseUI();
+    }
+
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            e.preventDefault();
+            togglePlayPause();
+        }
+    });
+
+    // 矢印を描画する関数を追加
+    function drawArrow(x, y, length, direction, color, label) {
+        const headlen = 10;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.fillStyle = color;
+        ctx.font = 'bold 12px Arial';
+
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + (direction === 'right' ? length : -length), y);
+        ctx.stroke();
+        
+        const sign = direction === 'right' ? 1 : -1;
+        ctx.beginPath();
+        ctx.moveTo(x + length * sign, y);
+        ctx.lineTo(x + (length-headlen) * sign, y - headlen/1.5);
+        ctx.moveTo(x + length * sign, y);
+        ctx.lineTo(x + (length-headlen) * sign, y + headlen/1.5);
+        ctx.stroke();
+
+        if (label) {
+            // 矢印の右側にラベルを表示
+            ctx.fillText(label, x + (direction === 'right' ? length + 5 : 5), y + 4);
+        }
+    }
+
+    function drawGrid() {
+        ctx.strokeStyle = '#f0f0f0'; ctx.lineWidth = 1;
+        for (let x = 0; x <= canvas.width; x += PX_M) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            if (x % 100 === 0) {
+                ctx.fillStyle = '#aaa'; ctx.font = '10px Arial';
+                ctx.fillText((x / PX_M) + 'm', x + 2, canvas.height - 5);
+            }
+        }
+        ctx.beginPath(); ctx.moveTo(0, CENTER_Y); ctx.lineTo(canvas.width, CENTER_Y); ctx.stroke();
+        // 壁
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(WALL_X_M * PX_M, 50); ctx.lineTo(WALL_X_M * PX_M, canvas.height - 50); ctx.stroke();
+        ctx.fillStyle = '#333'; ctx.font = '14px Arial';
+        ctx.fillText(reflectionMode === 'free' ? '自由端' : '固定端', WALL_X_M * PX_M - 20, 40);
+    }
+
+    function animate() {
+        const a = parseFloat(elements.amp.value), l = parseFloat(elements.lambda.value), v = parseFloat(elements.speed.value);
+        const densM = parseFloat(elements.density.value);
+
+        document.getElementById('val-amp').textContent = a;
+        document.getElementById('val-lambda').textContent = l.toFixed(1);
+        document.getElementById('val-speed').textContent = v.toFixed(1);
+        document.getElementById('val-density').textContent = densM.toFixed(1);
+
+        if (!isPaused) {
+            t += 0.01;
+            elements.timeSlider.value = t;
+            if (t >= 10) { t = 10; isPaused = true; updatePauseUI(); }
+        } else {
+            t = parseFloat(elements.timeSlider.value);
+        }
+        document.getElementById('val-time').textContent = t.toFixed(2);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+
+        const k = (2 * Math.PI) / l;
+        const head_M = (1.5 * l) + v * t;
+
+        const pointsIncident = [], pointsIncidentVirtual = [];
+        const pointsReflected = [], pointsSum = [];
+
+        for (let px = 0; px <= canvas.width; px += 1) {
+            const xM = px / PX_M;
+            let yInc = 0;
+            if (xM <= head_M) yInc = a * Math.sin(k * (xM - head_M));
+
+            if (xM <= WALL_X_M) {
+                pointsIncident.push({x: px, y: CENTER_Y + yInc});
+            } else {
+                pointsIncidentVirtual.push({x: px, y: CENTER_Y + yInc});
+            }
+
+            if (xM <= WALL_X_M) {
+                const virtualXM = 2 * WALL_X_M - xM;
+                let yRef = 0;
+                if (virtualXM <= head_M) {
+                    yRef = a * Math.sin(k * (virtualXM - head_M));
+                    if (reflectionMode === 'fixed') yRef = -yRef;
+                }
+                pointsReflected.push({x: px, y: CENTER_Y + yRef});
+                pointsSum.push({x: px, y: CENTER_Y + (yInc + yRef)});
+            }
+        }
+
+        drawPath(pointsIncident, 'rgba(0, 0, 255, 0.6)', 2);
+        drawPath(pointsIncidentVirtual, 'rgba(0, 0, 255, 0.15)', 2);
+        drawPath(pointsReflected, 'rgba(0, 128, 0, 0.5)', 2);
+        drawPath(pointsSum, 'red', 3);
+
+        // 媒質粒子の描画
+        const stepPX = densM * PX_M;
+        for (let px = 0; px <= WALL_X_M * PX_M; px += stepPX) {
+            const xM = px / PX_M;
+            let yInc = 0;
+            if (xM <= head_M) yInc = a * Math.sin(k * (xM - head_M));
+            const virtualXM = 2 * WALL_X_M - xM;
+            let yRef = 0;
+            if (virtualXM <= head_M) {
+                yRef = a * Math.sin(k * (virtualXM - head_M));
+                if (reflectionMode === 'fixed') yRef = -yRef;
+            }
+            ctx.beginPath();
+            ctx.arc(px, CENTER_Y + (yInc + yRef), 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = 'white'; ctx.fill();
+            ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.stroke();
+        }
+
+        // 矢印の描画
+        // 入射波（常に表示）
+        drawArrow(30, 40, 30, 'right', 'blue', '入射波');
+        
+        // 反射波（壁に到達したら表示）
+        if (head_M >= WALL_X_M) {
+            drawArrow(150, 40, 30, 'left', 'green', '反射波');
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    function drawPath(points, color, width) {
+        if (points.length < 2) return;
+        ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = width;
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.stroke();
+    }
+
+    function updatePauseUI() {
+        elements.pauseBtn.textContent = isPaused ? "▶ 再生" : "❚❚ 停止";
+        elements.pauseBtn.style.backgroundColor = isPaused ? "#28a745" : "#ffc107";
+    }
+
+    elements.pauseBtn.onclick = togglePlayPause;
+    
+    elements.resetBtn.onclick = () => {
+        t = defaults.time;
+        elements.timeSlider.value = defaults.time;
+        elements.amp.value = defaults.amp;
+        elements.lambda.value = defaults.lambda;
+        elements.speed.value = defaults.speed;
+        elements.density.value = defaults.density;
+        isPaused = true;
+        updatePauseUI();
+    };
+
+    elements.freeEndBtn.onclick = () => {
+        reflectionMode = 'free';
+        elements.freeEndBtn.classList.add('active');
+        elements.fixedEndBtn.classList.remove('active');
+    };
+
+    elements.fixedEndBtn.onclick = () => {
+        reflectionMode = 'fixed';
+        elements.fixedEndBtn.classList.add('active');
+        elements.freeEndBtn.classList.remove('active');
+    };
+
+    elements.timeSlider.oninput = () => { isPaused = true; updatePauseUI(); };
+
+    animate();
+</script>
+
+</body>
+</html>
